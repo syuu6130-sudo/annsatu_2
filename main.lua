@@ -2,22 +2,28 @@
 -- 作者: @syu_u0316 --
 -- 全Executer対応 - 図形ESPシステム搭載版 --
 
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+-- Rayfieldの安全な読み込み
+local success, Rayfield = pcall(function()
+    return loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+end)
+
+if not success then
+    game:GetService("StarterGui"):SetCore("SendNotification", {
+        Title = "エラー",
+        Text = "Rayfieldの読み込みに失敗しました",
+        Duration = 5
+    })
+    return
+end
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Camera = workspace.CurrentCamera
 
 local player = Players.LocalPlayer
 local mouse = player:GetMouse()
-
--- ========== 互換性チェック ==========
-local isSupportedExecutor = true
-local hasGetConnections = pcall(getconnections, game.Loaded)
-local hasVirtualInput = pcall(function() return VirtualInputManager.SendMouseButtonEvent end)
 
 -- ========== 設定 ==========
 local softAimEnabled = false
@@ -33,10 +39,6 @@ local aimPart = "Head"
 local circleRadius = 120
 local circleThickness = 3
 local circleSize = 240
-
-local currentLockTarget = nil
-local lastShootTime = 0
-local isShootingActive = false
 
 -- キー設定
 local softAimKey = Enum.KeyCode.Q
@@ -70,26 +72,7 @@ local espFolder = Instance.new("Folder")
 espFolder.Name = "ESP"
 espFolder.Parent = game.CoreGui
 
--- ========== 武器システム ==========
-local weaponData = {
-    currentTool = nil,
-    remotes = {}
-}
-
-local function getEquippedWeapon()
-    if not player.Character then return nil end
-    return player.Character:FindFirstChildOfClass("Tool")
-end
-
--- ========== チームチェック & 壁判定 ==========
-local function isVisible(target)
-    local origin = Camera.CFrame.Position
-    local direction = (target.Position - origin)
-    local ray = Ray.new(origin, direction)
-    local hit = workspace:FindPartOnRay(ray, player.Character, false, true)
-    return (not hit or hit:IsDescendantOf(target.Parent))
-end
-
+-- ========== 基本機能 ==========
 local function isEnemy(plr)
     if not player.Team or not plr.Team then
         return true
@@ -101,23 +84,16 @@ end
 function getClosestEnemy()
     local closest, dist = nil, math.huge
     local camCF = Camera.CFrame
-    local camDir = camCF.LookVector
-    local maxAngle = math.rad(70)
 
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= player and isEnemy(p) and p.Character then
             local targetPart = p.Character:FindFirstChild(aimPart) or p.Character:FindFirstChild("Head")
             local humanoid = p.Character:FindFirstChildOfClass("Humanoid")
             if targetPart and humanoid and humanoid.Health > 0 then
-                local dir = (targetPart.Position - camCF.Position).Unit
-                local dot = camDir:Dot(dir)
-                local angle = math.acos(math.clamp(dot, -1, 1))
-                if angle < maxAngle then
-                    local mag = (targetPart.Position - camCF.Position).Magnitude
-                    if mag < dist and isVisible(targetPart) then
-                        closest = p.Character
-                        dist = mag
-                    end
+                local mag = (targetPart.Position - camCF.Position).Magnitude
+                if mag < dist then
+                    closest = p.Character
+                    dist = mag
                 end
             end
         end
@@ -131,11 +107,6 @@ local function isInMagicCircle(screenPos)
     local viewportSize = Camera.ViewportSize
     local centerX = viewportSize.X / 2
     local centerY = viewportSize.Y / 2
-    
-    local isMobile = (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled)
-    if isMobile then
-        centerY = viewportSize.Y * 0.4
-    end
     
     local distance = math.sqrt((screenPos.X - centerX)^2 + (screenPos.Y - centerY)^2)
     return distance <= circleRadius
@@ -155,65 +126,6 @@ local function getEnemyInCircle()
         end
     end
     return nil, nil
-end
-
--- ========== Silent Aim (全Executer対応版) ==========
-local silentAimHooked = false
-local function setupSilentAim()
-    if silentAimHooked then return end
-    
-    local success, mt = pcall(getrawmetatable, game)
-    if not success then
-        warn("⚠️ メタテーブル取得失敗 - SilentAim無効")
-        return
-    end
-    
-    local oldNamecall
-    local oldIndex
-    
-    pcall(function()
-        oldNamecall = mt.__namecall
-        oldIndex = mt.__index
-        
-        setreadonly(mt, false)
-        
-        mt.__namecall = newcclosure(function(self, ...)
-            local args = {...}
-            local method = getnamecallmethod()
-            
-            if silentAimEnabled and (method == "FireServer" or method == "InvokeServer") then
-                local target = getClosestEnemy()
-                if target then
-                    local targetPart = target:FindFirstChild(aimPart) or target:FindFirstChild("Head")
-                    if targetPart then
-                        if typeof(args[1]) == "Vector3" then
-                            args[1] = targetPart.Position
-                        elseif typeof(args[1]) == "CFrame" then
-                            args[1] = targetPart.CFrame
-                        end
-                    end
-                end
-            end
-            
-            return oldNamecall(self, unpack(args))
-        end)
-        
-        mt.__index = newcclosure(function(self, key)
-            if silentAimEnabled and key == "Hit" then
-                local target = getClosestEnemy()
-                if target then
-                    local targetPart = target:FindFirstChild(aimPart) or target:FindFirstChild("Head")
-                    if targetPart then
-                        return targetPart.CFrame
-                    end
-                end
-            end
-            return oldIndex(self, key)
-        end)
-        
-        setreadonly(mt, true)
-        silentAimHooked = true
-    end)
 end
 
 -- ========== メインループ ==========
@@ -261,19 +173,15 @@ local function createShape()
     local screen = Instance.new("ScreenGui")
     screen.Name = "ShapeScreen"
     screen.Parent = circleFolder
+    screen.ResetOnSpawn = false
+    screen.IgnoreGuiInset = true
 
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(0, circleSize, 0, circleSize)
     frame.AnchorPoint = Vector2.new(0.5, 0.5)
     frame.BackgroundTransparency = 1
     frame.Parent = screen
-
-    local isMobile = (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled)
-    if isMobile then
-        frame.Position = UDim2.new(0.5, 0, 0.4, 0)
-    else
-        frame.Position = UDim2.new(0.5, 0, 0.5, 0)
-    end
+    frame.Position = UDim2.new(0.5, 0, 0.5, 0)
 
     if currentShape == "丸" then
         local corner = Instance.new("UICorner", frame)
@@ -359,14 +267,6 @@ RunService.RenderStepped:Connect(function()
                 -- サイズアニメーション
                 local scale = 1 + 0.05 * math.sin(tick() * 2)
                 shape.Size = UDim2.new(0, circleSize * scale, 0, circleSize * scale)
-
-                -- 位置調整
-                local isMobile = (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled)
-                if isMobile then
-                    shape.Position = UDim2.new(0.5, 0, 0.4, 0)
-                else
-                    shape.Position = UDim2.new(0.5, 0, 0.5, 0)
-                end
             end
         end
     end
@@ -392,6 +292,8 @@ local function updateESP()
                         local tracerGui = Instance.new("ScreenGui")
                         tracerGui.Name = "Tracer_" .. p.Name
                         tracerGui.Parent = espFolder
+                        tracerGui.ResetOnSpawn = false
+                        tracerGui.IgnoreGuiInset = true
 
                         local frame = Instance.new("Frame")
                         frame.Size = UDim2.new(0, 2, 0, 1000)
@@ -400,7 +302,13 @@ local function updateESP()
                         frame.BorderSizePixel = 0
                         frame.Parent = tracerGui
 
-                        RunService.RenderStepped:Connect(function()
+                        local connection
+                        connection = RunService.RenderStepped:Connect(function()
+                            if not p.Character or not head then
+                                connection:Disconnect()
+                                return
+                            end
+                            
                             local vector, onScreen = Camera:WorldToViewportPoint(head.Position)
                             if onScreen then
                                 frame.Visible = true
@@ -423,13 +331,13 @@ end
 
 -- ========== Rayfieldウィンドウ作成 ==========
 local Window = Rayfield:CreateWindow({
-   Name = "暗殺者対保安官2 v3 | 全Executer対応",
-   LoadingTitle = "全Executer対応版 図形ESPシステム",
-   LoadingSubtitle = "互換性: " .. (isSupportedExecutor and "良好" or "一部制限"),
+   Name = "暗殺者対保安官2",
+   LoadingTitle = "図形ESPシステム",
+   LoadingSubtitle = "全Executer対応版",
    ConfigurationSaving = {
-      Enabled = true,
-      FolderName = "AssassinSheriff2_Universal",
-      FileName = "config"
+      Enabled = false,
+      FolderName = nil,
+      FileName = "暗殺者対保安官2"
    },
    Discord = {
       Enabled = false,
@@ -440,16 +348,16 @@ local Window = Rayfield:CreateWindow({
 })
 
 -- ========== タブ作成 ==========
-local CombatTab = Window:CreateTab("戦闘", nil)
-local VisualTab = Window:CreateTab("視覚効果", nil)
-local ESPTab = Window:CreateTab("ESP", nil)
+local CombatTab = Window:CreateTab("戦闘", 4483362458)
+local VisualTab = Window:CreateTab("視覚効果", 4483362458)
+local ESPTab = Window:CreateTab("ESP", 4483362458)
 
 -- ========== 戦闘タブ ==========
-local AimSection = CombatTab:CreateSection("エイム設定")
+CombatTab:CreateSection("エイム設定")
 
 local SoftAimToggle = CombatTab:CreateToggle({
    Name = "ソフトエイム (キー押下で有効)",
-   CurrentValue = false,
+   CurrentValue = softAimEnabled,
    Flag = "SoftAim",
    Callback = function(Value)
        softAimEnabled = Value
@@ -458,7 +366,7 @@ local SoftAimToggle = CombatTab:CreateToggle({
 
 local AutoAimToggle = CombatTab:CreateToggle({
    Name = "自動エイム (スナップ)",
-   CurrentValue = false,
+   CurrentValue = autoAimEnabled,
    Flag = "AutoAim",
    Callback = function(Value)
        autoAimEnabled = Value
@@ -467,38 +375,36 @@ local AutoAimToggle = CombatTab:CreateToggle({
 
 local SilentAimToggle = CombatTab:CreateToggle({
    Name = "サイレントエイム",
-   CurrentValue = false,
+   CurrentValue = silentAimEnabled,
    Flag = "SilentAim",
    Callback = function(Value)
        silentAimEnabled = Value
-       if Value then
-           setupSilentAim()
-       end
    end,
 })
 
-local AimStrengthSlider = CombatTab:CreateSlider({
+CombatTab:CreateSlider({
    Name = "ソフトエイム強度",
    Range = {0.1, 1},
    Increment = 0.05,
-   CurrentValue = 0.3,
+   Suffix = "強度",
+   CurrentValue = softAimStrength,
    Flag = "AimStrength",
    Callback = function(Value)
        softAimStrength = Value
    end,
 })
 
-local AimPartDropdown = CombatTab:CreateDropdown({
+CombatTab:CreateDropdown({
    Name = "狙う部位",
    Options = {"Head", "HumanoidRootPart", "UpperTorso", "LowerTorso"},
-   CurrentOption = "Head",
+   CurrentOption = aimPart,
    Flag = "AimPart",
    Callback = function(Option)
        aimPart = Option
    end,
 })
 
-local SoftAimKeybind = CombatTab:CreateKeybind({
+CombatTab:CreateKeybind({
    Name = "ソフトエイムキー",
    CurrentKeybind = softAimKeyString,
    HoldToInteract = false,
@@ -510,11 +416,11 @@ local SoftAimKeybind = CombatTab:CreateKeybind({
 })
 
 -- ========== 視覚効果タブ ==========
-local CircleSection = VisualTab:CreateSection("図形設定")
+VisualTab:CreateSection("図形設定")
 
 local CircleToggle = VisualTab:CreateToggle({
    Name = "図形を表示",
-   CurrentValue = false,
+   CurrentValue = circleEnabled,
    Flag = "Circle",
    Callback = function(Value)
        circleEnabled = Value
@@ -530,17 +436,17 @@ local CircleToggle = VisualTab:CreateToggle({
 
 local MagicCircleToggle = VisualTab:CreateToggle({
    Name = "図形内自動エイム",
-   CurrentValue = false,
+   CurrentValue = magicCircleEnabled,
    Flag = "MagicCircle",
    Callback = function(Value)
        magicCircleEnabled = Value
    end,
 })
 
-local ShapeDropdown = VisualTab:CreateDropdown({
+VisualTab:CreateDropdown({
    Name = "図形の形",
    Options = shapes,
-   CurrentOption = "丸",
+   CurrentOption = currentShape,
    Flag = "Shape",
    Callback = function(Option)
        currentShape = Option
@@ -550,10 +456,10 @@ local ShapeDropdown = VisualTab:CreateDropdown({
    end,
 })
 
-local ColorDropdown = VisualTab:CreateDropdown({
+VisualTab:CreateDropdown({
    Name = "図形の色",
    Options = colors,
-   CurrentOption = "赤",
+   CurrentOption = currentColor,
    Flag = "Color",
    Callback = function(Option)
        currentColor = Option
@@ -563,22 +469,24 @@ local ColorDropdown = VisualTab:CreateDropdown({
    end,
 })
 
-local CircleRadiusSlider = VisualTab:CreateSlider({
+VisualTab:CreateSlider({
    Name = "自動エイム範囲",
    Range = {50, 500},
    Increment = 10,
-   CurrentValue = 120,
+   Suffix = "px",
+   CurrentValue = circleRadius,
    Flag = "CircleRadius",
    Callback = function(Value)
        circleRadius = Value
    end,
 })
 
-local CircleSizeSlider = VisualTab:CreateSlider({
+VisualTab:CreateSlider({
    Name = "図形の大きさ",
    Range = {50, 500},
    Increment = 10,
-   CurrentValue = 240,
+   Suffix = "px",
+   CurrentValue = circleSize,
    Flag = "CircleSize",
    Callback = function(Value)
        circleSize = Value
@@ -588,11 +496,12 @@ local CircleSizeSlider = VisualTab:CreateSlider({
    end,
 })
 
-local CircleThicknessSlider = VisualTab:CreateSlider({
+VisualTab:CreateSlider({
    Name = "図形の太さ",
    Range = {1, 20},
    Increment = 1,
-   CurrentValue = 3,
+   Suffix = "px",
+   CurrentValue = circleThickness,
    Flag = "CircleThickness",
    Callback = function(Value)
        circleThickness = Value
@@ -603,11 +512,11 @@ local CircleThicknessSlider = VisualTab:CreateSlider({
 })
 
 -- ========== ESPタブ ==========
-local ESPSection = ESPTab:CreateSection("ESP設定")
+ESPTab:CreateSection("ESP設定")
 
 local ESPToggle = ESPTab:CreateToggle({
    Name = "ESPを有効化",
-   CurrentValue = false,
+   CurrentValue = espEnabled,
    Flag = "ESP",
    Callback = function(Value)
        espEnabled = Value
@@ -617,7 +526,7 @@ local ESPToggle = ESPTab:CreateToggle({
 
 local TracersToggle = ESPTab:CreateToggle({
    Name = "Tracers (線)",
-   CurrentValue = false,
+   CurrentValue = tracersEnabled,
    Flag = "Tracers",
    Callback = function(Value)
        tracersEnabled = Value
@@ -625,45 +534,20 @@ local TracersToggle = ESPTab:CreateToggle({
    end,
 })
 
--- ========== 互換性情報 ==========
-local CompatibilitySection = ESPTab:CreateSection("互換性情報")
-
-local CompatibilityLabel = ESPTab:CreateLabel(
-    "互換性状態:\n" ..
-    "getconnections: " .. (hasGetConnections and "✅ 利用可能" or "❌ 利用不可") .. "\n" ..
-    "VirtualInput: " .. (hasVirtualInput and "✅ 利用可能" or "❌ 利用不可") .. "\n" ..
-    "SilentAim: " .. (silentAimHooked and "✅ 初期化済み" or "🔄 準備中")
-)
-
--- ========== 通知 ==========
-Rayfield:Notify({
-   Title = "全Executer対応版 読み込み完了",
-   Content = "暗殺者対保安官2 v3 - 図形ESPシステム\n互換性: " .. 
-             (hasGetConnections and "getconnections✅ " or "getconnections❌ ") ..
-             (hasVirtualInput and "VirtualInput✅" or "VirtualInput❌"),
-   Duration = 5,
-   Image = nil,
-})
-
 -- ========== 自動更新ループ ==========
 task.spawn(function()
-    while true do
-        task.wait(1)
+    while task.wait(1) do
         updateESP()
     end
 end)
 
--- ========== 初期化 ==========
+-- ========== 初期化完了通知 ==========
 task.spawn(function()
     task.wait(2)
-    setupSilentAim()
-    
-    -- 互換性情報を更新
-    task.wait(1)
-    CompatibilityLabel:Set(
-        "互換性状態:\n" ..
-        "getconnections: " .. (hasGetConnections and "✅ 利用可能" or "❌ 利用不可") .. "\n" ..
-        "VirtualInput: " .. (hasVirtualInput and "✅ 利用可能" or "❌ 利用不可") .. "\n" ..
-        "SilentAim: " .. (silentAimHooked and "✅ 初期化済み" : "❌ 初期化失敗")
-    )
+    Rayfield:Notify({
+        Title = "読み込み完了",
+        Content = "暗殺者対保安官2 - 全Executer対応版が起動しました",
+        Duration = 5,
+        Image = nil,
+    })
 end)
