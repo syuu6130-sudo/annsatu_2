@@ -1,6 +1,6 @@
---// 暗殺者対保安官2 - Xeno Executer専用版 //--
+--// 暗殺者対保安官2 - 全Executer対応版 //--
 -- 作者: @syu_u0316 --
--- Xeno最適化版 - 超高密度自動射撃 v3 --
+-- 全Executer対応 - 図形ESPシステム搭載版 --
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
@@ -13,6 +13,11 @@ local Camera = workspace.CurrentCamera
 
 local player = Players.LocalPlayer
 local mouse = player:GetMouse()
+
+-- ========== 互換性チェック ==========
+local isSupportedExecutor = true
+local hasGetConnections = pcall(getconnections, game.Loaded)
+local hasVirtualInput = pcall(function() return VirtualInputManager.SendMouseButtonEvent end)
 
 -- ========== 設定 ==========
 local softAimEnabled = false
@@ -152,13 +157,16 @@ local function getEnemyInCircle()
     return nil, nil
 end
 
--- ========== Silent Aim (Xeno最適化版) ==========
+-- ========== Silent Aim (全Executer対応版) ==========
 local silentAimHooked = false
 local function setupSilentAim()
     if silentAimHooked then return end
     
     local success, mt = pcall(getrawmetatable, game)
-    if not success then return end
+    if not success then
+        warn("⚠️ メタテーブル取得失敗 - SilentAim無効")
+        return
+    end
     
     local oldNamecall
     local oldIndex
@@ -415,12 +423,12 @@ end
 
 -- ========== Rayfieldウィンドウ作成 ==========
 local Window = Rayfield:CreateWindow({
-   Name = "暗殺者対保安官2 v3 | Xeno専用",
-   LoadingTitle = "Xeno最適化版 超高密度射撃システム",
-   LoadingSubtitle = "図形ESPシステム搭載",
+   Name = "暗殺者対保安官2 v3 | 全Executer対応",
+   LoadingTitle = "全Executer対応版 図形ESPシステム",
+   LoadingSubtitle = "互換性: " .. (isSupportedExecutor and "良好" or "一部制限"),
    ConfigurationSaving = {
       Enabled = true,
-      FolderName = "AssassinSheriff2_Xeno",
+      FolderName = "AssassinSheriff2_Universal",
       FileName = "config"
    },
    Discord = {
@@ -617,10 +625,22 @@ local TracersToggle = ESPTab:CreateToggle({
    end,
 })
 
+-- ========== 互換性情報 ==========
+local CompatibilitySection = ESPTab:CreateSection("互換性情報")
+
+local CompatibilityLabel = ESPTab:CreateLabel(
+    "互換性状態:\n" ..
+    "getconnections: " .. (hasGetConnections and "✅ 利用可能" or "❌ 利用不可") .. "\n" ..
+    "VirtualInput: " .. (hasVirtualInput and "✅ 利用可能" or "❌ 利用不可") .. "\n" ..
+    "SilentAim: " .. (silentAimHooked and "✅ 初期化済み" or "🔄 準備中")
+)
+
 -- ========== 通知 ==========
 Rayfield:Notify({
-   Title = "Xeno専用版 読み込み完了",
-   Content = "暗殺者対保安官2 v3 - 図形ESPシステム\n設定が完了しました",
+   Title = "全Executer対応版 読み込み完了",
+   Content = "暗殺者対保安官2 v3 - 図形ESPシステム\n互換性: " .. 
+             (hasGetConnections and "getconnections✅ " or "getconnections❌ ") ..
+             (hasVirtualInput and "VirtualInput✅" or "VirtualInput❌"),
    Duration = 5,
    Image = nil,
 })
@@ -633,8 +653,17 @@ task.spawn(function()
     end
 end)
 
--- ========== Xeno専用初期化 ==========
+-- ========== 初期化 ==========
 task.spawn(function()
     task.wait(2)
     setupSilentAim()
+    
+    -- 互換性情報を更新
+    task.wait(1)
+    CompatibilityLabel:Set(
+        "互換性状態:\n" ..
+        "getconnections: " .. (hasGetConnections and "✅ 利用可能" or "❌ 利用不可") .. "\n" ..
+        "VirtualInput: " .. (hasVirtualInput and "✅ 利用可能" or "❌ 利用不可") .. "\n" ..
+        "SilentAim: " .. (silentAimHooked and "✅ 初期化済み" : "❌ 初期化失敗")
+    )
 end)
